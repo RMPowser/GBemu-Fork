@@ -230,3 +230,6 @@ cmake --build . --target run_tests
 - ✅ **Passing** - Test passes successfully
 - ❌ **Failing** - Test is disabled or not yet implemented
 
+## Future plans
+- Adding full CGB support
+- Adding RetroAchievements.org support
