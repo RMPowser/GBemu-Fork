@@ -282,6 +282,24 @@ if(APPLE AND LIB_SOURCES)
         $<$<CONFIG:Debug>:-g -O0>
         $<$<CONFIG:Release>:-O3 -DNDEBUG>
     )
+    
+    # ============================================================================
+    # DMG CREATION TARGET
+    # ============================================================================
+    
+    # Add a custom target to create a DMG installer
+    add_custom_target(create_dmg
+        COMMAND ${CMAKE_COMMAND} -E echo "Creating DMG installer..."
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/dmg_staging"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "$<TARGET_BUNDLE_DIR:${PROJECT_NAME}>" "${CMAKE_BINARY_DIR}/dmg_staging/GBEmu.app"
+        COMMAND ${CMAKE_COMMAND} -E create_symlink /Applications "${CMAKE_BINARY_DIR}/dmg_staging/Applications"
+        COMMAND hdiutil create -volname "GBEmu" -srcfolder "${CMAKE_BINARY_DIR}/dmg_staging" -ov -format UDZO "${CMAKE_BINARY_DIR}/GBEmu.dmg"
+        COMMAND ${CMAKE_COMMAND} -E remove_directory "${CMAKE_BINARY_DIR}/dmg_staging"
+        COMMAND ${CMAKE_COMMAND} -E echo "DMG created: ${CMAKE_BINARY_DIR}/GBEmu.dmg"
+        DEPENDS ${PROJECT_NAME}
+        COMMENT "Creating distributable DMG package"
+        VERBATIM
+    )
 endif()
 
 # ============================================================================
