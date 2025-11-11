@@ -12,21 +12,27 @@ if(CLANG_TIDY_EXE)
     set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE};-p=${CMAKE_BINARY_DIR}")
 endif()
 
-# Find SDL2
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL2 REQUIRED sdl2)
+# Find SDL2 (Windows-only for now)
+if(WIN32)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SDL2 REQUIRED sdl2)
 
-if(SDL2_STATIC_LIBRARIES)
-    set(SDL2_LIBRARIES ${SDL2_STATIC_LIBRARIES})
-endif()
+    if(SDL2_STATIC_LIBRARIES)
+        set(SDL2_LIBRARIES ${SDL2_STATIC_LIBRARIES})
+    endif()
 
-if(SDL2_STATIC_INCLUDE_DIRS)
-    set(SDL2_INCLUDE_DIRS ${SDL2_STATIC_INCLUDE_DIRS})
+    if(SDL2_STATIC_INCLUDE_DIRS)
+        set(SDL2_INCLUDE_DIRS ${SDL2_STATIC_INCLUDE_DIRS})
+    endif()
 endif()
 
 # Add compiler flags for all C++ compilation
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -g -Werror -fno-omit-frame-pointer")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++ -static")
+
+# Enable fully static linking only for MinGW builds on Windows
+if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static-libgcc -static-libstdc++ -static")
+endif()
 
 # Optional: Set default build type if not specified
 if(NOT CMAKE_BUILD_TYPE)
@@ -75,11 +81,17 @@ if(LIB_SOURCES)
         ${CMAKE_CURRENT_SOURCE_DIR}/joypad
         ${CMAKE_CURRENT_SOURCE_DIR}/utils
         ${CMAKE_CURRENT_SOURCE_DIR}/SDL
-        ${SDL2_INCLUDE_DIRS}
     )
 
-    # Link SDL2 to library, APULib, and PPULib
-    target_link_libraries(${PROJECT_NAME}Lib PUBLIC ${SDL2_LIBRARIES} APULib PPULib)
+    if(WIN32)
+        target_include_directories(${PROJECT_NAME}Lib PUBLIC ${SDL2_INCLUDE_DIRS})
+    endif()
+
+    # Link libraries used by the emulator core
+    target_link_libraries(${PROJECT_NAME}Lib PUBLIC APULib PPULib)
+    if(WIN32)
+        target_link_libraries(${PROJECT_NAME}Lib PUBLIC ${SDL2_LIBRARIES})
+    endif()
 
     # Set compiler flags for library
     target_compile_options(${PROJECT_NAME}Lib PRIVATE
@@ -135,44 +147,53 @@ target_compile_options(PPULib PRIVATE
 )
 
 # ============================================================================
-# SDL WINDOW LIBRARY
+# SDL WINDOW LIBRARY (Windows-only)
 # ============================================================================
 
-add_library(SDLWindowLib STATIC SDL/SDLWindow.cpp)
+if(WIN32)
+    add_library(SDLWindowLib STATIC SDL/SDLWindow.cpp)
 
-# Include directories for SDLWindow library
-target_include_directories(SDLWindowLib PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/SDL
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils
-    ${CMAKE_CURRENT_SOURCE_DIR}/joypad
-    ${SDL2_INCLUDE_DIRS}
-)
+    # Include directories for SDLWindow library
+    target_include_directories(SDLWindowLib PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/SDL
+        ${CMAKE_CURRENT_SOURCE_DIR}/utils
+        ${CMAKE_CURRENT_SOURCE_DIR}/joypad
+        ${SDL2_INCLUDE_DIRS}
+    )
 
-# Link SDLWindow library to PPULib (this will inherit PPULib's include directories)
-target_link_libraries(SDLWindowLib PUBLIC PPULib)
+    # Link SDLWindow library to PPULib (this will inherit PPULib's include directories)
+    target_link_libraries(SDLWindowLib PUBLIC PPULib)
 
-# Link SDL2 to SDLWindow library
-target_link_libraries(SDLWindowLib PUBLIC ${SDL2_LIBRARIES} comdlg32)
+    # Link SDL2 to SDLWindow library
+    target_link_libraries(SDLWindowLib PUBLIC ${SDL2_LIBRARIES} comdlg32)
 
-# Set compiler flags for SDLWindow library
-target_compile_options(SDLWindowLib PRIVATE
-    $<$<CONFIG:Debug>:-g -O0>
-    $<$<CONFIG:Release>:-O3 -DNDEBUG>
-)
+    # Set compiler flags for SDLWindow library
+    target_compile_options(SDLWindowLib PRIVATE
+        $<$<CONFIG:Debug>:-g -O0>
+        $<$<CONFIG:Release>:-O3 -DNDEBUG>
+    )
+endif()
 
 # ============================================================================
-# MAIN EXECUTABLE
+# MAIN EXECUTABLE (Windows-only)
 # ============================================================================
 
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/main.cpp AND LIB_SOURCES)
-    # Add Windows resource file if on Windows (but keep console attached)
-    if(WIN32)
-        set(RESOURCE_FILE ${CMAKE_CURRENT_SOURCE_DIR}/SDL/resource.rc)
-        add_executable(${PROJECT_NAME} WIN32 main.cpp ${RESOURCE_FILE})
+if(WIN32 AND LIB_SOURCES)
+    set(WINDOWS_MAIN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/windows_main)
+    set(WINDOWS_MAIN_SOURCES
+        ${WINDOWS_MAIN_DIR}/main.cpp
+        ${WINDOWS_MAIN_DIR}/GBEmulator.cpp
+    )
+
+    set(RESOURCE_FILE ${CMAKE_CURRENT_SOURCE_DIR}/SDL/resource.rc)
+    if(EXISTS ${RESOURCE_FILE})
+        add_executable(${PROJECT_NAME} WIN32 ${WINDOWS_MAIN_SOURCES} ${RESOURCE_FILE})
     else()
-        add_executable(${PROJECT_NAME} main.cpp)
+        add_executable(${PROJECT_NAME} WIN32 ${WINDOWS_MAIN_SOURCES})
     endif()
+
+    target_include_directories(${PROJECT_NAME} PRIVATE ${WINDOWS_MAIN_DIR})
 
     # Link with library, APULib, PPULib, and SDLWindow library
     target_link_libraries(${PROJECT_NAME} PRIVATE ${PROJECT_NAME}Lib APULib PPULib SDLWindowLib)
@@ -195,9 +216,13 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test/test_blargg.cpp AND LIB_SOURCES)
     add_executable(test_blargg test/test_blargg.cpp)
     add_executable(test_mooneye test/test_mooneye.cpp)
 
-    # Link with library, APULib, PPULib, and SDLWindow library
-    target_link_libraries(test_blargg PRIVATE ${PROJECT_NAME}Lib APULib PPULib SDLWindowLib)
-    target_link_libraries(test_mooneye PRIVATE ${PROJECT_NAME}Lib APULib PPULib SDLWindowLib)
+    # Link with core libraries (and SDL window support on Windows)
+    target_link_libraries(test_blargg PRIVATE ${PROJECT_NAME}Lib APULib PPULib)
+    target_link_libraries(test_mooneye PRIVATE ${PROJECT_NAME}Lib APULib PPULib)
+    if(WIN32)
+        target_link_libraries(test_blargg PRIVATE SDLWindowLib)
+        target_link_libraries(test_mooneye PRIVATE SDLWindowLib)
+    endif()
 
     # Set compiler flags for test executable
     target_compile_options(test_blargg PRIVATE
