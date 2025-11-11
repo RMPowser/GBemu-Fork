@@ -14,18 +14,46 @@ endif()
 
 # Find SDL2
 find_package(PkgConfig REQUIRED)
-pkg_check_modules(SDL2 REQUIRED sdl2 IMPORTED_TARGET)
+set(PKG_CONFIG_USE_CMAKE_PREFIX_PATH ON)
 
-if(SDL2_STATIC_LIBRARIES)
-    set(SDL2_LIBRARIES ${SDL2_STATIC_LIBRARIES})
-elseif(NOT SDL2_LIBRARIES AND pkgcfg_lib_SDL2_SDL2)
-    set(SDL2_LIBRARIES ${pkgcfg_lib_SDL2_SDL2})
-endif()
+# On macOS, prefer static linking for SDL2 to avoid requiring users to install it
+if(APPLE)
+    # Force pkg-config to return static library information
+    set(ENV{PKG_CONFIG_STATIC} "1")
+    pkg_check_modules(SDL2 REQUIRED sdl2)
+    
+    # Manually find the static library path
+    find_library(SDL2_STATIC_LIB NAMES libSDL2.a PATHS /opt/homebrew/lib /opt/homebrew/opt/sdl2/lib NO_DEFAULT_PATH)
+    if(SDL2_STATIC_LIB)
+        message(STATUS "Found static SDL2 library: ${SDL2_STATIC_LIB}")
+        
+        # Use the static library directly instead of -lSDL2
+        set(SDL2_LIBRARIES ${SDL2_STATIC_LIB})
+        set(SDL2_INCLUDE_DIRS ${SDL2_STATIC_INCLUDE_DIRS})
+        
+        # Extract only the framework link flags from LDFLAGS, excluding -lSDL2
+        string(REGEX REPLACE "-lSDL2[^ ]*" "" SDL2_FRAMEWORKS "${SDL2_STATIC_LDFLAGS_OTHER}")
+        set(SDL2_LDFLAGS ${SDL2_FRAMEWORKS})
+        
+        message(STATUS "SDL2_LIBRARIES: ${SDL2_LIBRARIES}")
+        message(STATUS "SDL2_LDFLAGS: ${SDL2_LDFLAGS}")
+    else()
+        message(FATAL_ERROR "Could not find static SDL2 library")
+    endif()
+else()
+    # Windows and other platforms use regular dynamic linking
+    pkg_check_modules(SDL2 REQUIRED sdl2 IMPORTED_TARGET)
+    if(SDL2_STATIC_LIBRARIES)
+        set(SDL2_LIBRARIES ${SDL2_STATIC_LIBRARIES})
+    elseif(NOT SDL2_LIBRARIES AND pkgcfg_lib_SDL2_SDL2)
+        set(SDL2_LIBRARIES ${pkgcfg_lib_SDL2_SDL2})
+    endif()
 
-if(SDL2_STATIC_INCLUDE_DIRS)
-    set(SDL2_INCLUDE_DIRS ${SDL2_STATIC_INCLUDE_DIRS})
-elseif(NOT SDL2_INCLUDE_DIRS AND pkgcfg_include_dirs_SDL2)
-    set(SDL2_INCLUDE_DIRS ${pkgcfg_include_dirs_SDL2})
+    if(SDL2_STATIC_INCLUDE_DIRS)
+        set(SDL2_INCLUDE_DIRS ${SDL2_STATIC_INCLUDE_DIRS})
+    elseif(NOT SDL2_INCLUDE_DIRS AND pkgcfg_include_dirs_SDL2)
+        set(SDL2_INCLUDE_DIRS ${pkgcfg_include_dirs_SDL2})
+    endif()
 endif()
 
 
@@ -158,7 +186,13 @@ target_include_directories(SDLWindowLib PUBLIC
 )
 
 # Link SDL2 to SDLWindow library
-if(TARGET PkgConfig::SDL2)
+if(APPLE)
+    # On macOS, use static SDL2 libraries and link flags
+    target_link_libraries(SDLWindowLib PUBLIC ${SDL2_LIBRARIES})
+    if(SDL2_LDFLAGS)
+        target_link_options(SDLWindowLib PUBLIC ${SDL2_LDFLAGS})
+    endif()
+elseif(TARGET PkgConfig::SDL2)
     target_link_libraries(SDLWindowLib PUBLIC PkgConfig::SDL2)
 elseif(SDL2_LIBRARIES)
     target_link_libraries(SDLWindowLib PUBLIC ${SDL2_LIBRARIES})
@@ -208,8 +242,27 @@ if(APPLE AND LIB_SOURCES)
         ${MAC_MAIN_DIR}/MacUI.mm
     )
 
-    add_executable(${PROJECT_NAME} ${MAC_MAIN_SOURCES})
+    add_executable(${PROJECT_NAME} MACOSX_BUNDLE ${MAC_MAIN_SOURCES})
     set_source_files_properties(${MAC_MAIN_DIR}/MacUI.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    
+    # Configure macOS app bundle properties
+    set_target_properties(${PROJECT_NAME} PROPERTIES
+        MACOSX_BUNDLE TRUE
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.gbemu.GBEmu"
+        MACOSX_BUNDLE_BUNDLE_NAME "GBEmu"
+        MACOSX_BUNDLE_BUNDLE_VERSION "1.0"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0"
+        MACOSX_BUNDLE_ICON_FILE "GBEmu.icns"
+    )
+    
+    # Copy icon file into the app bundle
+    set(ICON_FILE "${MAC_MAIN_DIR}/GBEmu.icns")
+    if(EXISTS ${ICON_FILE})
+        set_source_files_properties(${ICON_FILE} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+        target_sources(${PROJECT_NAME} PRIVATE ${ICON_FILE})
+    else()
+        message(WARNING "Icon file not found: ${ICON_FILE}. App bundle will not have an icon.")
+    endif()
 
     target_include_directories(${PROJECT_NAME} PRIVATE ${MAC_MAIN_DIR})
 
@@ -218,17 +271,25 @@ if(APPLE AND LIB_SOURCES)
         APULib
         PPULib
         SDLWindowLib
-        PkgConfig::SDL2
+        ${SDL2_LIBRARIES}
         "-framework AppKit"
         "-framework Cocoa"
         "-framework Foundation"
         "-framework UniformTypeIdentifiers"
     )
 
+    # Add SDL2 link flags for static linking (includes required frameworks)
+    if(SDL2_LDFLAGS)
+        target_link_options(${PROJECT_NAME} PRIVATE ${SDL2_LDFLAGS})
+    endif()
+
     target_include_directories(${PROJECT_NAME} PRIVATE ${MAC_MAIN_DIR} ${SDL2_INCLUDE_DIRS})
     if(SDL2_LIBRARY_DIRS)
         target_link_directories(${PROJECT_NAME} PRIVATE ${SDL2_LIBRARY_DIRS})
     endif()
+
+    # Add -ObjC flag to ensure Objective-C categories are linked properly with static libs
+    target_link_options(${PROJECT_NAME} PRIVATE "-ObjC")
 
     target_compile_options(${PROJECT_NAME} PRIVATE
         $<$<CONFIG:Debug>:-g -O0>
