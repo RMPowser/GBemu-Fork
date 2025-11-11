@@ -12,19 +12,22 @@ if(CLANG_TIDY_EXE)
     set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY_EXE};-p=${CMAKE_BINARY_DIR}")
 endif()
 
-# Find SDL2 (Windows-only for now)
-if(WIN32)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(SDL2 REQUIRED sdl2)
+# Find SDL2
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SDL2 REQUIRED sdl2 IMPORTED_TARGET)
 
-    if(SDL2_STATIC_LIBRARIES)
-        set(SDL2_LIBRARIES ${SDL2_STATIC_LIBRARIES})
-    endif()
-
-    if(SDL2_STATIC_INCLUDE_DIRS)
-        set(SDL2_INCLUDE_DIRS ${SDL2_STATIC_INCLUDE_DIRS})
-    endif()
+if(SDL2_STATIC_LIBRARIES)
+    set(SDL2_LIBRARIES ${SDL2_STATIC_LIBRARIES})
+elseif(NOT SDL2_LIBRARIES AND pkgcfg_lib_SDL2_SDL2)
+    set(SDL2_LIBRARIES ${pkgcfg_lib_SDL2_SDL2})
 endif()
+
+if(SDL2_STATIC_INCLUDE_DIRS)
+    set(SDL2_INCLUDE_DIRS ${SDL2_STATIC_INCLUDE_DIRS})
+elseif(NOT SDL2_INCLUDE_DIRS AND pkgcfg_include_dirs_SDL2)
+    set(SDL2_INCLUDE_DIRS ${pkgcfg_include_dirs_SDL2})
+endif()
+
 
 # Add compiler flags for all C++ compilation
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -g -Werror -fno-omit-frame-pointer")
@@ -139,33 +142,34 @@ target_compile_options(PPULib PRIVATE
 )
 
 # ============================================================================
-# SDL WINDOW LIBRARY (Windows-only)
+# SDL WINDOW LIBRARY
 # ============================================================================
 
-if(WIN32)
-    add_library(SDLWindowLib STATIC SDL/SDLWindow.cpp)
 
-    # Include directories for SDLWindow library
-    target_include_directories(SDLWindowLib PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/SDL
-        ${CMAKE_CURRENT_SOURCE_DIR}/utils
-        ${CMAKE_CURRENT_SOURCE_DIR}/joypad
-        ${SDL2_INCLUDE_DIRS}
-    )
+add_library(SDLWindowLib STATIC SDL/SDLWindow.cpp)
 
-    # Link SDLWindow library to PPULib (this will inherit PPULib's include directories)
-    target_link_libraries(SDLWindowLib PUBLIC PPULib)
+# Include directories for SDLWindow library
+target_include_directories(SDLWindowLib PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/SDL
+    ${CMAKE_CURRENT_SOURCE_DIR}/utils
+    ${CMAKE_CURRENT_SOURCE_DIR}/joypad
+    ${SDL2_INCLUDE_DIRS}
+)
 
-    # Link SDL2 to SDLWindow library
+# Link SDL2 to SDLWindow library
+if(TARGET PkgConfig::SDL2)
+    target_link_libraries(SDLWindowLib PUBLIC PkgConfig::SDL2)
+elseif(SDL2_LIBRARIES)
     target_link_libraries(SDLWindowLib PUBLIC ${SDL2_LIBRARIES})
-
-    # Set compiler flags for SDLWindow library
-    target_compile_options(SDLWindowLib PRIVATE
-        $<$<CONFIG:Debug>:-g -O0>
-        $<$<CONFIG:Release>:-O3 -DNDEBUG>
-    )
 endif()
+
+# Set compiler flags for SDLWindow library
+target_compile_options(SDLWindowLib PRIVATE
+    $<$<CONFIG:Debug>:-g -O0>
+    $<$<CONFIG:Release>:-O3 -DNDEBUG>
+)
+
 
 # ============================================================================
 # MAIN EXECUTABLE (Windows-only)
@@ -188,6 +192,46 @@ if(WIN32 AND LIB_SOURCES)
     target_link_libraries(${PROJECT_NAME} PRIVATE ${PROJECT_NAME}Lib APULib PPULib SDLWindowLib comdlg32)
 
     # Set compiler flags for main executable
+    target_compile_options(${PROJECT_NAME} PRIVATE
+        $<$<CONFIG:Debug>:-g -O0>
+        $<$<CONFIG:Release>:-O3 -DNDEBUG>
+    )
+endif()
+
+# ============================================================================
+# MAIN EXECUTABLE (macOS-only)
+# ============================================================================
+
+if(APPLE AND LIB_SOURCES)
+    set(MAC_MAIN_DIR ${CMAKE_CURRENT_SOURCE_DIR}/mac_main)
+    set(MAC_MAIN_SOURCES
+        ${MAC_MAIN_DIR}/main.cpp
+        ${MAC_MAIN_DIR}/GBEmulator.cpp
+        ${MAC_MAIN_DIR}/MacUI.mm
+    )
+
+    add_executable(${PROJECT_NAME} ${MAC_MAIN_SOURCES})
+    set_source_files_properties(${MAC_MAIN_DIR}/MacUI.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+
+    target_include_directories(${PROJECT_NAME} PRIVATE ${MAC_MAIN_DIR})
+
+    target_link_libraries(${PROJECT_NAME} PRIVATE
+        ${PROJECT_NAME}Lib
+        APULib
+        PPULib
+        SDLWindowLib
+        PkgConfig::SDL2
+        "-framework AppKit"
+        "-framework Cocoa"
+        "-framework Foundation"
+        "-framework UniformTypeIdentifiers"
+    )
+
+    target_include_directories(${PROJECT_NAME} PRIVATE ${MAC_MAIN_DIR} ${SDL2_INCLUDE_DIRS})
+    if(SDL2_LIBRARY_DIRS)
+        target_link_directories(${PROJECT_NAME} PRIVATE ${SDL2_LIBRARY_DIRS})
+    endif()
+
     target_compile_options(${PROJECT_NAME} PRIVATE
         $<$<CONFIG:Debug>:-g -O0>
         $<$<CONFIG:Release>:-O3 -DNDEBUG>
@@ -371,7 +415,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/test/test_blargg.cpp AND LIB_SOURCES)
         # test/mooneye_roms/acceptance/boot_hwio-dmgABCmgb.gb #This one relies on startup timing of STAT being in the correct mode
         # test/mooneye_roms/acceptance/ppu/lcdon_timing-GS.gb #This is DMG only so I'm not sure I care.
         # test/mooneye_roms/acceptance/ppu/lcdon_write_timing-GS.gb
-        
+
 
         #test/mooneye_roms/misc/boot_div-A.gb #AGB only
         #test/mooneye_roms/misc/boot_div-cgb0.gb #CGB0 Only
